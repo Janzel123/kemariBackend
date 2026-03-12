@@ -13,7 +13,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 
 include '../config/db.php';
 
-// --- Rest of your code remains the same ---
+// Read JSON input
 $input = file_get_contents("php://input");
 $data = json_decode($input);
 
@@ -26,31 +26,43 @@ if (!$data) {
     exit;
 }
 
-// Validate required fields
-$required = ['name', 'email', 'subject', 'message'];
+// Required fields
+$required = ['name', 'email', 'message'];
 foreach ($required as $field) {
     if (empty($data->$field)) {
         echo json_encode([
             "status" => "error",
-            "message" => "Field '$field' is required",
-            "received" => $data
+            "message" => "Field '$field' is required"
         ]);
         exit;
     }
 }
 
+// Optional fields
+$company = $data->company ?? "";
+$phone = $data->phone ?? "";
+$subject = $data->subject ?? "No Subject";
+
 // Prepare SQL
-$sql = "INSERT INTO messages (name,email,subject,message) VALUES (:name,:email,:subject,:message)";
+$sql = "INSERT INTO messages (name, company, email, phone, subject, message)
+        VALUES (:name, :company, :email, :phone, :subject, :message)";
+
 $stmt = $conn->prepare($sql);
 
 try {
     $stmt->execute([
         ':name' => $data->name,
+        ':company' => $company,
         ':email' => $data->email,
-        ':subject' => $data->subject,
+        ':phone' => $phone,
+        ':subject' => $subject,
         ':message' => $data->message
     ]);
-    echo json_encode(["status" => "success"]);
+
+    echo json_encode([
+        "status" => "success",
+        "message" => "Message saved successfully"
+    ]);
 } catch (PDOException $e) {
     echo json_encode([
         "status" => "error",
