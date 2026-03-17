@@ -38,24 +38,20 @@ foreach ($required as $field) {
     }
 }
 
-// Optional fields
-$company = $data->company ?? "";
+// Optional field
 $phone = $data->phone ?? "";
-$subject = $data->subject ?? "No Subject";
 
 // Prepare SQL
-$sql = "INSERT INTO messages (name, company, email, phone, subject, message)
-        VALUES (:name, :company, :email, :phone, :subject, :message)";
+$sql = "INSERT INTO messages (name, email, phone, message)
+        VALUES (:name, :email, :phone, :message)";
 
 $stmt = $conn->prepare($sql);
 
 try {
     $stmt->execute([
         ':name' => $data->name,
-        ':company' => $company,
         ':email' => $data->email,
         ':phone' => $phone,
-        ':subject' => $subject,
         ':message' => $data->message
     ]);
 
