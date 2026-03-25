@@ -36,7 +36,8 @@ try {
             "message" => "Login successful",
             "admin" => [
                 "id" => $admin['id'],
-                "username" => $admin['username']
+                "username" => $admin['username'],
+                "role" => $admin['role'] // ✅ IMPORTANT (NEW)
             ]
         ]);
     } else {

@@ -1,9 +1,11 @@
 <?php
+// ✅ CORS
 header("Access-Control-Allow-Origin: *");
 header("Access-Control-Allow-Headers: Content-Type");
 header("Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS");
 header("Content-Type: application/json");
 
+// ✅ PREFLIGHT
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     http_response_code(200);
     exit();
@@ -13,18 +15,53 @@ include("../config/db.php");
 
 $method = $_SERVER['REQUEST_METHOD'];
 
+// 📥 GET DATA (for POST, PUT, DELETE)
+$data = json_decode(file_get_contents("php://input"));
 
-// ✅ GET
+
+// =========================
+// ✅ GET ADMINS (no restriction)
+// =========================
 if ($method === "GET") {
-    $stmt = $conn->prepare("SELECT id, username, created_at FROM admins ORDER BY id DESC");
+    $stmt = $conn->prepare("SELECT id, username, role, created_at FROM admins ORDER BY id DESC");
     $stmt->execute();
     echo json_encode($stmt->fetchAll(PDO::FETCH_ASSOC));
 }
 
 
-// ✅ CREATE
+// =========================
+// 🔐 CHECK AUTH FOR OTHER METHODS
+// =========================
+if ($method !== "GET") {
+
+    if (!isset($data->admin_id)) {
+        echo json_encode(["message" => "Unauthorized"]);
+        exit;
+    }
+
+    // GET CURRENT ADMIN ROLE
+    $stmt = $conn->prepare("SELECT role FROM admins WHERE id=?");
+    $stmt->execute([$data->admin_id]);
+    $currentAdmin = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    if (!$currentAdmin) {
+        echo json_encode(["message" => "Invalid admin"]);
+        exit;
+    }
+
+    $role = $currentAdmin['role'];
+}
+
+
+// =========================
+// ✅ CREATE ADMIN (SUPERADMIN ONLY)
+// =========================
 if ($method === "POST") {
-    $data = json_decode(file_get_contents("php://input"));
+
+    if ($role !== "superadmin") {
+        echo json_encode(["message" => "Access denied"]);
+        exit;
+    }
 
     $username = trim($data->username);
     $password = trim($data->password);
@@ -47,9 +84,10 @@ if ($method === "POST") {
 }
 
 
-// ✅ UPDATE
+// =========================
+// ✏️ UPDATE ADMIN (ALL ADMINS)
+// =========================
 if ($method === "PUT") {
-    $data = json_decode(file_get_contents("php://input"));
 
     $id = $data->id;
     $username = trim($data->username);
@@ -57,6 +95,12 @@ if ($method === "PUT") {
 
     if ($username === "") {
         echo json_encode(["message" => "Username required"]);
+        exit;
+    }
+
+    // 🔐 RULE: ONLY SUPERADMIN OR OWNER CAN EDIT
+    if ($role !== "superadmin" && $data->admin_id != $id) {
+        echo json_encode(["message" => "You can only edit your own account"]);
         exit;
     }
 
@@ -77,15 +121,25 @@ if ($method === "PUT") {
 }
 
 
-// ❌ DELETE
+// =========================
+// ❌ DELETE ADMIN (SUPERADMIN ONLY)
+// =========================
 if ($method === "DELETE") {
-    $data = json_decode(file_get_contents("php://input"));
 
-    $id = $data->id;
+    if ($role !== "superadmin") {
+        echo json_encode(["message" => "Access denied"]);
+        exit;
+    }
+
+    // ❗ PREVENT SELF DELETE
+    if ($data->id == $data->admin_id) {
+        echo json_encode(["message" => "You cannot delete yourself"]);
+        exit;
+    }
 
     try {
         $stmt = $conn->prepare("DELETE FROM admins WHERE id=?");
-        $stmt->execute([$id]);
+        $stmt->execute([$data->id]);
 
         echo json_encode(["message" => "Admin deleted"]);
     } catch (PDOException $e) {
