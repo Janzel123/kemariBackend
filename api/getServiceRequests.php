@@ -13,8 +13,6 @@ try {
                 service, 
                 message AS details, 
                 status, 
-                start_date,   -- ✅ ADD THIS
-                end_date,     -- ✅ ADD THIS
                 created_at
             FROM service_requests
             ORDER BY created_at DESC";
@@ -24,6 +22,7 @@ try {
 
     $requests = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
+    // Capitalize status or default to "New"
     foreach ($requests as &$req) {
         $req['status'] = isset($req['status']) 
             ? ucfirst(strtolower($req['status'])) 
