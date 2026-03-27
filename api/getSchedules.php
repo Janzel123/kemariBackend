@@ -11,6 +11,7 @@ try {
                 s.request_id,
                 s.start_date,
                 s.end_date,
+                s.note,
                 r.name,
                 r.email,
                 r.phone,
