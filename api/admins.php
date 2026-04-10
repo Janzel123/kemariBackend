@@ -15,100 +15,176 @@ include("../config/db.php");
 
 $method = $_SERVER['REQUEST_METHOD'];
 
-// 📥 GET DATA (for POST, PUT, DELETE)
-$data = json_decode(file_get_contents("php://input"));
+// 📥 GET DATA
+// ✅ POST uses $_POST + $_FILES (multipart/form-data), others use JSON body
+if ($method !== "POST") {
+    $data = json_decode(file_get_contents("php://input"));
+}
 
 
 // =========================
-// ✅ GET ADMINS (no restriction)
+// ✅ GET ADMINS
 // =========================
 if ($method === "GET") {
-    $stmt = $conn->prepare("SELECT id, username, role, created_at FROM admins ORDER BY id DESC");
+    $stmt = $conn->prepare("SELECT id, username, role, profile_image, created_at FROM admins ORDER BY id DESC");
     $stmt->execute();
     echo json_encode($stmt->fetchAll(PDO::FETCH_ASSOC));
+    exit;
 }
 
 
 // =========================
 // 🔐 CHECK AUTH FOR OTHER METHODS
 // =========================
-if ($method !== "GET") {
+if ($method === "POST") {
+    $admin_id = $_POST['admin_id'] ?? null;
+} else {
+    $admin_id = $data->admin_id ?? null;
+}
 
-    if (!isset($data->admin_id)) {
-        echo json_encode(["message" => "Unauthorized"]);
+if (!$admin_id) {
+    echo json_encode(["message" => "Unauthorized"]);
+    exit;
+}
+
+$stmt = $conn->prepare("SELECT role FROM admins WHERE id=?");
+$stmt->execute([$admin_id]);
+$currentAdmin = $stmt->fetch(PDO::FETCH_ASSOC);
+
+if (!$currentAdmin) {
+    echo json_encode(["message" => "Invalid admin"]);
+    exit;
+}
+
+$role = $currentAdmin['role'];
+
+
+// =========================
+// ✅ SHARED: HANDLE PROFILE IMAGE UPLOAD
+// Returns new image path or null if no file was uploaded
+// =========================
+function handleImageUpload($uploadDir = "../uploads/admins/") {
+    if (!isset($_FILES['profile_image']) || $_FILES['profile_image']['error'] !== UPLOAD_ERR_OK) {
+        return null; // no file uploaded — that's fine
+    }
+
+    if (!is_dir($uploadDir)) {
+        mkdir($uploadDir, 0755, true);
+    }
+
+    $fileInfo    = $_FILES['profile_image'];
+    $ext         = strtolower(pathinfo($fileInfo['name'], PATHINFO_EXTENSION));
+    $allowedExts = ['jpg', 'jpeg', 'png', 'gif', 'webp'];
+
+    if (!in_array($ext, $allowedExts)) {
+        echo json_encode(["message" => "Invalid image type. Allowed: jpg, jpeg, png, gif, webp"]);
         exit;
     }
 
-    // GET CURRENT ADMIN ROLE
-    $stmt = $conn->prepare("SELECT role FROM admins WHERE id=?");
-    $stmt->execute([$data->admin_id]);
-    $currentAdmin = $stmt->fetch(PDO::FETCH_ASSOC);
-
-    if (!$currentAdmin) {
-        echo json_encode(["message" => "Invalid admin"]);
+    if ($fileInfo['size'] > 2 * 1024 * 1024) {
+        echo json_encode(["message" => "Image too large. Max 2MB."]);
         exit;
     }
 
-    $role = $currentAdmin['role'];
+    $newFilename = "admin_" . time() . "_" . bin2hex(random_bytes(4)) . "." . $ext;
+    $destination = $uploadDir . $newFilename;
+
+    if (!move_uploaded_file($fileInfo['tmp_name'], $destination)) {
+        echo json_encode(["message" => "Failed to save image"]);
+        exit;
+    }
+
+    return "uploads/admins/" . $newFilename;
 }
 
 
 // =========================
 // ✅ CREATE ADMIN (SUPERADMIN ONLY)
 // =========================
-if ($method === "POST") {
+if ($method === "POST" && empty($_POST['id'])) {
 
     if ($role !== "superadmin") {
         echo json_encode(["message" => "Access denied"]);
         exit;
     }
 
-    $username = trim($data->username);
-    $password = trim($data->password);
+    $username = trim($_POST['username'] ?? "");
+    $password = trim($_POST['password'] ?? "");
 
     if ($username === "" || $password === "") {
         echo json_encode(["message" => "Fields required"]);
         exit;
     }
 
-    $hashed = password_hash($password, PASSWORD_DEFAULT);
+    $hashed    = password_hash($password, PASSWORD_DEFAULT);
+    $imagePath = handleImageUpload();
 
     try {
-        $stmt = $conn->prepare("INSERT INTO admins (username, password) VALUES (?, ?)");
-        $stmt->execute([$username, $hashed]);
+        $stmt = $conn->prepare("INSERT INTO admins (username, password, profile_image) VALUES (?, ?, ?)");
+        $stmt->execute([$username, $hashed, $imagePath]);
 
         echo json_encode(["message" => "Admin created"]);
     } catch (PDOException $e) {
-        echo json_encode(["message" => "Username exists"]);
+        echo json_encode(["message" => "Username already exists"]);
     }
+
+    exit;
 }
 
 
 // =========================
-// ✏️ UPDATE ADMIN (ALL ADMINS)
+// ✏️ UPDATE ADMIN (SUPERADMIN OR OWNER) — supports profile image change
 // =========================
-if ($method === "PUT") {
+if ($method === "POST" && !empty($_POST['id'])) {
 
-    $id = $data->id;
-    $username = trim($data->username);
-    $password = trim($data->password);
+    $id       = (int) $_POST['id'];
+    $username = trim($_POST['username'] ?? "");
+    $password = trim($_POST['password'] ?? "");
 
     if ($username === "") {
         echo json_encode(["message" => "Username required"]);
         exit;
     }
 
-    // 🔐 RULE: ONLY SUPERADMIN OR OWNER CAN EDIT
-    if ($role !== "superadmin" && $data->admin_id != $id) {
+    // 🔐 ONLY SUPERADMIN OR OWNER CAN EDIT
+    if ($role !== "superadmin" && $admin_id != $id) {
         echo json_encode(["message" => "You can only edit your own account"]);
         exit;
     }
 
+    // ✅ Handle new image upload
+    $newImagePath = handleImageUpload();
+
+    // If a new image was uploaded, delete the old one
+    if ($newImagePath) {
+        $stmt = $conn->prepare("SELECT profile_image FROM admins WHERE id=?");
+        $stmt->execute([$id]);
+        $existing = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if ($existing && $existing['profile_image']) {
+            $oldFile = "../" . $existing['profile_image'];
+            if (file_exists($oldFile)) {
+                unlink($oldFile);
+            }
+        }
+    }
+
     try {
-        if ($password !== "") {
+        // Build query dynamically based on what changed
+        if ($password !== "" && $newImagePath) {
             $hashed = password_hash($password, PASSWORD_DEFAULT);
-            $stmt = $conn->prepare("UPDATE admins SET username=?, password=? WHERE id=?");
+            $stmt   = $conn->prepare("UPDATE admins SET username=?, password=?, profile_image=? WHERE id=?");
+            $stmt->execute([$username, $hashed, $newImagePath, $id]);
+
+        } elseif ($password !== "") {
+            $hashed = password_hash($password, PASSWORD_DEFAULT);
+            $stmt   = $conn->prepare("UPDATE admins SET username=?, password=? WHERE id=?");
             $stmt->execute([$username, $hashed, $id]);
+
+        } elseif ($newImagePath) {
+            $stmt = $conn->prepare("UPDATE admins SET username=?, profile_image=? WHERE id=?");
+            $stmt->execute([$username, $newImagePath, $id]);
+
         } else {
             $stmt = $conn->prepare("UPDATE admins SET username=? WHERE id=?");
             $stmt->execute([$username, $id]);
@@ -118,6 +194,8 @@ if ($method === "PUT") {
     } catch (PDOException $e) {
         echo json_encode(["message" => "Update failed"]);
     }
+
+    exit;
 }
 
 
@@ -131,13 +209,24 @@ if ($method === "DELETE") {
         exit;
     }
 
-    // ❗ PREVENT SELF DELETE
     if ($data->id == $data->admin_id) {
         echo json_encode(["message" => "You cannot delete yourself"]);
         exit;
     }
 
     try {
+        // ✅ Also delete the profile image file if it exists
+        $stmt = $conn->prepare("SELECT profile_image FROM admins WHERE id=?");
+        $stmt->execute([$data->id]);
+        $row = $stmt->fetch(PDO::FETCH_ASSOC);
+
+        if ($row && $row['profile_image']) {
+            $filePath = "../" . $row['profile_image'];
+            if (file_exists($filePath)) {
+                unlink($filePath);
+            }
+        }
+
         $stmt = $conn->prepare("DELETE FROM admins WHERE id=?");
         $stmt->execute([$data->id]);
 
@@ -145,4 +234,6 @@ if ($method === "DELETE") {
     } catch (PDOException $e) {
         echo json_encode(["message" => "Delete failed"]);
     }
+
+    exit;
 }
