@@ -56,7 +56,8 @@ if (!$currentAdmin) {
     exit;
 }
 
-$role = $currentAdmin['role'];
+// ✅ Renamed to $currentRole to avoid conflict with $_POST['role']
+$currentRole = $currentAdmin['role'];
 
 
 // =========================
@@ -103,13 +104,18 @@ function handleImageUpload($uploadDir = "../uploads/admins/") {
 // =========================
 if ($method === "POST" && empty($_POST['id'])) {
 
-    if ($role !== "superadmin") {
+    if ($currentRole !== "superadmin") {
         echo json_encode(["message" => "Access denied"]);
         exit;
     }
 
-    $username = trim($_POST['username'] ?? "");
-    $password = trim($_POST['password'] ?? "");
+    $username    = trim($_POST['username'] ?? "");
+    $password    = trim($_POST['password'] ?? "");
+    // ✅ Read role from POST, default to "admin" if not provided or invalid
+    $targetRole  = trim($_POST['role'] ?? "admin");
+    if (!in_array($targetRole, ["admin", "superadmin"])) {
+        $targetRole = "admin";
+    }
 
     if ($username === "" || $password === "") {
         echo json_encode(["message" => "Fields required"]);
@@ -120,8 +126,9 @@ if ($method === "POST" && empty($_POST['id'])) {
     $imagePath = handleImageUpload();
 
     try {
-        $stmt = $conn->prepare("INSERT INTO admins (username, password, profile_image) VALUES (?, ?, ?)");
-        $stmt->execute([$username, $hashed, $imagePath]);
+        // ✅ Now includes role in the INSERT
+        $stmt = $conn->prepare("INSERT INTO admins (username, password, role, profile_image) VALUES (?, ?, ?, ?)");
+        $stmt->execute([$username, $hashed, $targetRole, $imagePath]);
 
         echo json_encode(["message" => "Admin created"]);
     } catch (PDOException $e) {
@@ -147,9 +154,18 @@ if ($method === "POST" && !empty($_POST['id'])) {
     }
 
     // 🔐 ONLY SUPERADMIN OR OWNER CAN EDIT
-    if ($role !== "superadmin" && $admin_id != $id) {
+    if ($currentRole !== "superadmin" && $admin_id != $id) {
         echo json_encode(["message" => "You can only edit your own account"]);
         exit;
+    }
+
+    // ✅ Only superadmin can change role; owners editing themselves keep their current role
+    $targetRole = null;
+    if ($currentRole === "superadmin") {
+        $targetRole = trim($_POST['role'] ?? "admin");
+        if (!in_array($targetRole, ["admin", "superadmin"])) {
+            $targetRole = "admin";
+        }
     }
 
     // ✅ Handle new image upload
@@ -170,24 +186,46 @@ if ($method === "POST" && !empty($_POST['id'])) {
     }
 
     try {
-        // Build query dynamically based on what changed
-        if ($password !== "" && $newImagePath) {
-            $hashed = password_hash($password, PASSWORD_DEFAULT);
-            $stmt   = $conn->prepare("UPDATE admins SET username=?, password=?, profile_image=? WHERE id=?");
-            $stmt->execute([$username, $hashed, $newImagePath, $id]);
+        // ✅ Build query dynamically based on what changed (now includes role if superadmin)
+        if ($currentRole === "superadmin") {
+            if ($password !== "" && $newImagePath) {
+                $hashed = password_hash($password, PASSWORD_DEFAULT);
+                $stmt   = $conn->prepare("UPDATE admins SET username=?, password=?, role=?, profile_image=? WHERE id=?");
+                $stmt->execute([$username, $hashed, $targetRole, $newImagePath, $id]);
 
-        } elseif ($password !== "") {
-            $hashed = password_hash($password, PASSWORD_DEFAULT);
-            $stmt   = $conn->prepare("UPDATE admins SET username=?, password=? WHERE id=?");
-            $stmt->execute([$username, $hashed, $id]);
+            } elseif ($password !== "") {
+                $hashed = password_hash($password, PASSWORD_DEFAULT);
+                $stmt   = $conn->prepare("UPDATE admins SET username=?, password=?, role=? WHERE id=?");
+                $stmt->execute([$username, $hashed, $targetRole, $id]);
 
-        } elseif ($newImagePath) {
-            $stmt = $conn->prepare("UPDATE admins SET username=?, profile_image=? WHERE id=?");
-            $stmt->execute([$username, $newImagePath, $id]);
+            } elseif ($newImagePath) {
+                $stmt = $conn->prepare("UPDATE admins SET username=?, role=?, profile_image=? WHERE id=?");
+                $stmt->execute([$username, $targetRole, $newImagePath, $id]);
 
+            } else {
+                $stmt = $conn->prepare("UPDATE admins SET username=?, role=? WHERE id=?");
+                $stmt->execute([$username, $targetRole, $id]);
+            }
         } else {
-            $stmt = $conn->prepare("UPDATE admins SET username=? WHERE id=?");
-            $stmt->execute([$username, $id]);
+            // Non-superadmin (owner editing themselves) — no role change allowed
+            if ($password !== "" && $newImagePath) {
+                $hashed = password_hash($password, PASSWORD_DEFAULT);
+                $stmt   = $conn->prepare("UPDATE admins SET username=?, password=?, profile_image=? WHERE id=?");
+                $stmt->execute([$username, $hashed, $newImagePath, $id]);
+
+            } elseif ($password !== "") {
+                $hashed = password_hash($password, PASSWORD_DEFAULT);
+                $stmt   = $conn->prepare("UPDATE admins SET username=?, password=? WHERE id=?");
+                $stmt->execute([$username, $hashed, $id]);
+
+            } elseif ($newImagePath) {
+                $stmt = $conn->prepare("UPDATE admins SET username=?, profile_image=? WHERE id=?");
+                $stmt->execute([$username, $newImagePath, $id]);
+
+            } else {
+                $stmt = $conn->prepare("UPDATE admins SET username=? WHERE id=?");
+                $stmt->execute([$username, $id]);
+            }
         }
 
         echo json_encode(["message" => "Admin updated"]);
@@ -204,7 +242,7 @@ if ($method === "POST" && !empty($_POST['id'])) {
 // =========================
 if ($method === "DELETE") {
 
-    if ($role !== "superadmin") {
+    if ($currentRole !== "superadmin") {
         echo json_encode(["message" => "Access denied"]);
         exit;
     }
